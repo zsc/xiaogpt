@@ -34,8 +34,8 @@ HARDWARE_COMMAND_DICT = {
 MI_USER = ""
 MI_PASS = ""
 OPENAI_API_KEY = ""
-KEY_WORD = "帮我"
 PROMPT = "请用100字以内回答"
+KEY_WORD = ["请问", "帮我", "给我", "你觉得", "告诉我"]
 
 # simulate the response from xiaoai server by type the input.
 CLI_INTERACTIVE_MODE = False
@@ -304,7 +304,9 @@ class MiGPT:
         return ""
 
     async def get_if_xiaoai_is_playing(self):
+        # 这里有bug，后面的库并没有这个方法
         playing_info = await self.mina_service.player_get_status(self.device_id)
+        print(playing_info)
         # WTF xiaomi api
         is_playing = (
             json.loads(playing_info.get("data", {}).get("info", "{}")).get("status", -1)
@@ -313,13 +315,50 @@ class MiGPT:
         return is_playing
 
     async def stop_if_xiaoai_is_playing(self):
+        # 这里有bug，后面的库并没有这个方法
         is_playing = await self.get_if_xiaoai_is_playing()
         if is_playing:
             # stop it
             await self.mina_service.player_pause(self.device_id)
 
+    async def do_chat_with_xiaoai(self, last_record, query, key):
+        if query.find(key) == 0:
+            # only mute when your clause start's with the keyword
+            if self.this_mute_xiaoai:
+                await self.stop_if_xiaoai_is_playing()
+            self.this_mute_xiaoai = False
+            # drop 帮我回答
+            # query = query.replace(KEY_WORD, "")
+            query = f"{query}，{PROMPT}"
+            # waiting for xiaoai speaker done
+            if not self.mute_xiaoai:
+                await asyncio.sleep(4)
+            await self.do_tts("正在问GPT请耐心等待")
+            try:
+                print(
+                    "以下是小爱的回答: ",
+                    last_record.get("answers")[0]
+                    .get("tts", {})
+                    .get("text"),
+                )
+            except Exception as e:
+                print(e)
+                print("小爱没回")
+            message = await self.ask_gpt(query)
+            # tts to xiaoai with ChatGPT answer
+            print("以下是GPT的回答: " + message)
+            await self.do_tts(message)
+            if self.mute_xiaoai:
+                while 1:
+                    is_playing = await self.get_if_xiaoai_is_playing()
+                    time.sleep(2)
+                    if not is_playing:
+                        break
+                self.this_mute_xiaoai = True
+
+
     async def run_forever(self):
-        print(f"Running xiaogpt now, 用`{KEY_WORD}`开头来提问")
+        print(f"Running xiaogpt now, 用`请问`开头来提问")
         async with ClientSession() as session:
             await self.init_all_data(session)
             while 1:
@@ -343,38 +382,8 @@ class MiGPT:
                 if new_timestamp > self.last_timestamp:
                     self.last_timestamp = new_timestamp
                     query = last_record.get("query", "")
-                    if query.find(KEY_WORD) != -1:
-                        # only mute when your clause start's with the keyword
-                        if self.this_mute_xiaoai:
-                            await self.stop_if_xiaoai_is_playing()
-                        self.this_mute_xiaoai = False
-                        # drop 帮我回答
-                        query = query.replace(KEY_WORD, "")
-                        query = f"{query}，{PROMPT}"
-                        # waiting for xiaoai speaker done
-                        if not self.mute_xiaoai:
-                            await asyncio.sleep(4)
-                        await self.do_tts("正在问GPT请耐心等待")
-                        try:
-                            print(
-                                "以下是小爱的回答: ",
-                                last_record.get("answers")[0]
-                                .get("tts", {})
-                                .get("text"),
-                            )
-                        except:
-                            print("小爱没回")
-                        message = await self.ask_gpt(query)
-                        # tts to xiaoai with ChatGPT answer
-                        print("以下是GPT的回答: " + message)
-                        await self.do_tts(message)
-                        if self.mute_xiaoai:
-                            while 1:
-                                is_playing = await self.get_if_xiaoai_is_playing()
-                                time.sleep(2)
-                                if not is_playing:
-                                    break
-                            self.this_mute_xiaoai = True
+                    for key in KEY_WORD:
+                        await self.do_chat_with_xiaoai(last_record, query, key)
                 else:
                     if self.verbose:
                         print("No new xiao ai record")
